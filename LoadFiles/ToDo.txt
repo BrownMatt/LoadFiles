@@ -1,0 +1,6 @@
+﻿
+Read settings from App.config
+command line arguments
+Logging
+db work
+
