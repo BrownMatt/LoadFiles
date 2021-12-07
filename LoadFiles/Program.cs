@@ -19,6 +19,12 @@ namespace LoadFiles
         {
             _logFolder = (!string.IsNullOrEmpty(logFolder)) ? logFolder : ConfigurationManager.AppSettings["LogPath"];
             _loadFolder = (!string.IsNullOrEmpty(loadFolder)) ? loadFolder : ConfigurationManager.AppSettings["LoadDirectory"];
+            if (null == _loadFolder)
+            {
+                var os = Environment.OSVersion;
+                _loadFolder = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                _loadFolder = Path.Combine(_loadFolder, "incoming");
+            }
         }
 
      
@@ -26,11 +32,14 @@ namespace LoadFiles
         {
             int count = 0;
 
-            // If processing sub folders
-            string[] subFolders = Directory.GetDirectories(_loadFolder);
+            string searchPattern = ConfigurationManager.AppSettings["SearchPattern"];
+            if (string.IsNullOrEmpty(searchPattern))
+                searchPattern = "*.*";
+
+            List<string> matchingFiles = GetMatchingFiles(_loadFolder, true, searchPattern);
 
             // Now process files in load folder
-            foreach (var file in Directory.EnumerateFiles(_loadFolder, "*.*"))
+            foreach (var file in matchingFiles)
             {
                 Console.WriteLine($"Processing file '{file}'");
                 if (0 == LoadFile(file)) count++;
@@ -38,6 +47,42 @@ namespace LoadFiles
 
             return count;
                 
+        }
+
+        private List<string> GetMatchingFiles(string rootFolder, bool searchSubfolders, string searchPattern)
+        {
+            Queue<string> folders = new Queue<string>();
+            List<string> files = new List<string>();
+            folders.Enqueue(rootFolder);
+            while (folders.Count != 0)
+            {
+                string currentFolder = folders.Dequeue();
+                try
+                {
+                    string[] filesInCurrent = Directory.GetFiles(currentFolder, searchPattern, System.IO.SearchOption.TopDirectoryOnly);
+                    files.AddRange(filesInCurrent);
+                }
+                catch(Exception ex)
+                {
+                    Console.WriteLine($"Directory.GetFiles Exception {ex.ToString()}");
+                }
+                try
+                {
+                    if (searchSubfolders)
+                    {
+                        string[] foldersInCurrent = Directory.GetDirectories(currentFolder, "*.*", System.IO.SearchOption.TopDirectoryOnly);
+                        foreach (string _current in foldersInCurrent)
+                        {
+                            folders.Enqueue(_current);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Directory.GetDirectories Exception {ex.ToString()}");
+                }
+            }
+            return files;
         }
 
         // Returns zero if file successfully loaded
@@ -186,9 +231,12 @@ namespace LoadFiles
         {
             FileLoader fl = new FileLoader();
             fl.LoadFiles();
-
-            Console.WriteLine("Press a key to exit");
-            Console.ReadKey();
+            
+            if(System.Diagnostics.Debugger.IsAttached)
+            {
+                Console.WriteLine("Press a key to exit");
+                Console.ReadKey();
+            }
         }
     }
 }
