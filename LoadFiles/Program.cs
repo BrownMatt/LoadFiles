@@ -60,7 +60,8 @@ namespace LoadFiles
                 try
                 {
                     string[] filesInCurrent = Directory.GetFiles(currentFolder, searchPattern, System.IO.SearchOption.TopDirectoryOnly);
-                    files.AddRange(filesInCurrent);
+                    if(filesInCurrent.Length > 0)
+                        files.AddRange(filesInCurrent);
                 }
                 catch(Exception ex)
                 {
