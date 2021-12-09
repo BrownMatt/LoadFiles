@@ -1,300 +1,18 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Configuration;
+using System.Data;
 using System.Data.SqlClient;
 using System.Diagnostics;
 using System.IO;
 using ExcelDataReader;
+using System.Security.Cryptography;
 
 namespace LoadFiles
 {
-    public interface IFileLoader
-    {
-        // Called once before any processing
-        void OnInit();
-        // Called once when all processing is complete
-        void OnFinish();
-        int OnCol(int col, int row, IExcelDataReader reader);
-        int OnRow(int rowNumber, int readerFieldCount, IExcelDataReader reader);
-        int OnFile(string filePath, FileInfo info);
-        int OnSheet(string sheetName);
-    }
-
-    public class TraceData : IFileLoader
-    {
-        private Action<string> _logger;
-        private Stopwatch stopwatch = new Stopwatch();
-
-        public TraceData(Action<string> logger=null)
-        {
-            _logger = logger ?? Console.WriteLine;
-        }
-
-        public void OnInit()
-        {
-            stopwatch.Start();
-        }
-
-        public void OnFinish()
-        {
-            stopwatch.Stop();
-            TimeSpan t = stopwatch.Elapsed;
-            _logger.Invoke($"Finished {DateTime.Now.ToString()} {t:hh\\:mm\\:ss}");
-        }
-
-        public int OnCol(int col, int row, IExcelDataReader reader)
-        {
-            string value = reader.GetValue(col) == null ? "null" : reader.GetValue(col).ToString();
-            string type = "null";
-            if (reader.GetValue(col) != null)
-                type = reader.GetFieldType(col).FullName;
-
-            _logger.Invoke($"Column {col.ToString()} Type {type} Value {value}");
-            return 0;
-        }
-
-        public int OnRow(int rowNumber, int readerFieldCount, IExcelDataReader reader)
-        {
-            if (rowNumber == 0)
-            {
-                if (null != reader.HeaderFooter)
-                {
-                    HeaderFooter h = reader.HeaderFooter;
-                    _logger.Invoke($"Contains header!");
-                }
-            }
-            _logger.Invoke($"Row {rowNumber.ToString()} FieldCount {readerFieldCount}");
-            return 0;
-        }
-
-        public int OnFile(string filePath, FileInfo info)
-        {
-            _logger.Invoke($"File {info.Name}");
-            return 0;
-        }
-
-        public int OnSheet(string sheetName)
-        {
-            _logger.Invoke($"Sheet '{sheetName}'");
-            return 0;
-        }
-    }
-
-    
-
     #region FileLoaderClass
-
-    public class FileLoader
-    {
-        private string _logFolder;
-        private string _loadFolder;
-        private IFileLoader _loader;
-        private Action<string> _logger;
-
-        public FileLoader(string logFolder = "", string loadFolder = "", IFileLoader loader = null, Action<string> logger = null)
-        {
-            _logFolder = (!string.IsNullOrEmpty(logFolder)) ? logFolder : ConfigurationManager.AppSettings["LogPath"];
-            _loadFolder = (!string.IsNullOrEmpty(loadFolder)) ? loadFolder : ConfigurationManager.AppSettings["LoadDirectory"];
-            if (null == _loadFolder)
-            {
-                _loadFolder = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-                _loadFolder = Path.Combine(_loadFolder, "incoming");
-            }
-
-            _logger = logger ?? Console.WriteLine;
-            _loader = loader ?? new TraceData(_logger);
-        }
-
-
-        public int LoadFiles()
-        {
-            _loader.OnInit();
-
-            int count = 0;
-
-            string searchPattern = ConfigurationManager.AppSettings["SearchPattern"];
-            if (string.IsNullOrEmpty(searchPattern))
-                searchPattern = "*.*";
-
-            List<string> matchingFiles = GetMatchingFiles(_loadFolder, true, searchPattern);
-
-            // Now process files in load folder
-            foreach (var file in matchingFiles)
-            {
-                _logger.Invoke($"Processing file '{file}'");
-                if (0 == LoadFile(file)) count++;
-            }
-
-            _loader.OnFinish();
-
-            return count;
-
-        }
-
-        private List<string> GetMatchingFiles(string rootFolder, bool searchSubfolders, string searchPattern)
-        {
-            Queue<string> folders = new Queue<string>();
-            List<string> files = new List<string>();
-            folders.Enqueue(rootFolder);
-            while (folders.Count != 0)
-            {
-                string currentFolder = folders.Dequeue();
-                try
-                {
-                    string[] filesInCurrent = Directory.GetFiles(currentFolder, searchPattern, System.IO.SearchOption.TopDirectoryOnly);
-                    if (filesInCurrent.Length > 0)
-                        files.AddRange(filesInCurrent);
-                }
-                catch (Exception ex)
-                {
-                    _logger.Invoke($"Directory.GetFiles Exception {ex.ToString()}");
-                }
-                try
-                {
-                    if (searchSubfolders)
-                    {
-                        string[] foldersInCurrent = Directory.GetDirectories(currentFolder, "*.*", System.IO.SearchOption.TopDirectoryOnly);
-                        foreach (string _current in foldersInCurrent)
-                        {
-                            folders.Enqueue(_current);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.Invoke($"Directory.GetDirectories Exception {ex.ToString()}");
-                }
-            }
-            return files;
-        }
-
-        // Returns zero if file successfully loaded
-        private int LoadFile(string filePath)
-        {
-            int retVal = 0;
-
-
-            FileInfo info = new FileInfo(filePath);
-            _logger.Invoke($"Extension '{info.Extension}' Size={info.Length.ToString()}");
-            if (0 != OnFile(filePath, info)) return retVal;
-
-            switch (info.Extension.ToLower())
-            {
-                case ".csv":
-                    retVal = LoadCsvFile(filePath, info);
-                    break;
-                case ".json": break;
-                case ".txt": break;
-                case ".xls": break;
-                case ".xlsx":
-                    //retVal = LoadXlsxFile(filePath, info);
-                    break;
-                case ".zip": break;
-            }
-
-
-            return retVal;
-        }
-
-
-        private int LoadXlsxFile(string filePath, FileInfo info)
-        {
-            int retVal = 0;
-            using (var stream = File.Open(filePath, FileMode.Open, FileAccess.Read))
-            {
-                //var cfg = new ExcelReaderConfiguration(){}
-                using (var reader = ExcelReaderFactory.CreateReader(stream))
-                {
-                    _logger.Invoke($"{info.Name} contains {reader.ResultsCount.ToString()} sheets");
-                    do
-                    {
-                        if (0 == OnSheet(reader.Name))
-                        {
-                            int row = 0;
-                            while (reader.Read())
-                            {
-                                if (0 == OnRow(row++, reader.FieldCount, reader))
-                                {
-                                    for (int col = 0; col < reader.FieldCount; col++)
-                                    {
-                                        if (0 != OnCol(col, row, reader))
-                                            return retVal;
-                                    }
-                                }
-                                // reader.GetDouble(0);
-                            }
-                        }
-                    } while (reader.NextResult());  // Next Sheet
-                }
-            }
-            return retVal;
-        }
-        private int LoadCsvFile(string filePath, FileInfo info)
-        {
-            int retVal = 0;
-            using (var stream = File.Open(filePath, FileMode.Open, FileAccess.Read))
-            {
-                var cfg = new ExcelReaderConfiguration()
-                {
-                    AnalyzeInitialCsvRows = 1
-                };
-                using (var reader = ExcelReaderFactory.CreateCsvReader(stream, cfg))
-                {
-                    _logger.Invoke($"{info.Name} contains {reader.ResultsCount.ToString()} sheets");
-                    do
-                    {
-                        if (0 == OnSheet(reader.Name))
-                        {
-                            int row = 0;
-                            while (reader.Read())
-                            {
-                                if (0 == OnRow(row++, reader.FieldCount, reader))
-                                {
-                                    for (int col = 0; col < reader.FieldCount; col++)
-                                    {
-                                        if (0 != OnCol(col, row, reader))
-                                            return retVal;
-                                    }
-                                }
-                                // reader.GetDouble(0);
-                            }
-                        }
-                    } while (reader.NextResult());  // Next Sheet
-                }
-            }
-            return retVal;
-        }
-
-
-
-
-        public int OnCol(int col, int row, IExcelDataReader reader)
-        {
-            return _loader.OnCol(col, row, reader);
-        }
-
-        public int OnRow(int rowNumber, int readerFieldCount, IExcelDataReader reader)
-        {
-            return _loader.OnRow(rowNumber, readerFieldCount, reader);
-        }
-
-        // return non zero to skip the file
-        // or zero to process file
-        public int OnFile(string filePath, FileInfo info)
-        {
-            return _loader.OnFile(filePath, info);
-        }
-
-        // return non zero to skip the sheet
-        // or zero to process sheet
-        public int OnSheet(string sheetName)
-        {
-            return _loader.OnSheet(sheetName);
-        }
-    }
 
     #endregion
 
@@ -328,7 +46,11 @@ namespace LoadFiles
         private Stopwatch stopwatch = new Stopwatch();
         private SqlConnection connection;
         private string currentFile;
+        private FileInfo currentFileInfo;
+        private string fileHash;
         private string currentSheet;
+        private int currentSheetId;
+        private DataTable fileSheetData;
 
         public LoadDataToSqlServer(string connectionString, Action<string> logger = null)
         {
@@ -344,6 +66,9 @@ namespace LoadFiles
 
         public void OnFinish()
         {
+            if(null != fileSheetData && null != connection)
+                BulkCopyToFileSheetData(currentFile, currentFileInfo);
+
             connection?.Close();
 
             stopwatch.Stop();
@@ -353,11 +78,19 @@ namespace LoadFiles
 
         public int OnCol(int col, int row, IExcelDataReader reader)
         {
-            string value = reader.GetValue(col) == null ? "null" : reader.GetValue(col).ToString();
+            string value = reader.GetValue(col) == null ? null : reader.GetValue(col).ToString();
             string type = "null";
             if (reader.GetValue(col) != null)
                 type = reader.GetFieldType(col).FullName;
-
+            if (null != fileSheetData)
+            {
+                DataRow dr = fileSheetData.NewRow();
+                dr["FSD_FLE_Id"] = currentSheetId;
+                dr["FSD_Row"] = row;
+                dr["FSD_Col"] = col;
+                dr["FSD_Data"] = value;
+                fileSheetData.Rows.Add(dr);
+            }
             _logger.Invoke($"Column {col.ToString()} Type {type} Value {value}");
             return 0;
         }
@@ -378,20 +111,108 @@ namespace LoadFiles
 
         public int OnFile(string filePath, FileInfo info)
         {
+            if (null != fileSheetData)
+            {
+                BulkCopyToFileSheetData(filePath, info);
+            }
+            else
+            {
+                fileSheetData = new DataTable("NewColumnData");
+                fileSheetData.Columns.Add("FSD_Id", typeof(int));
+                fileSheetData.Columns.Add("FSD_FLE_Id", typeof(int));
+                fileSheetData.Columns.Add("FSD_Row", typeof(int));
+                fileSheetData.Columns.Add("FSD_Col", typeof(int));
+                fileSheetData.Columns.Add("FSD_Data", typeof(string));
+
+                fileSheetData.Columns["FSD_Id"].AutoIncrement = true;
+
+                // don't allow null for these columns
+                fileSheetData.Columns["FSD_FLE_Id"].AllowDBNull = false;
+                fileSheetData.Columns["FSD_Row"].AllowDBNull = false;
+                fileSheetData.Columns["FSD_Col"].AllowDBNull = false;
+            }
             currentFile = filePath;
+            currentFileInfo = info;
+
+            // create a file hash 
+            if (!string.IsNullOrEmpty(currentFile) && File.Exists(currentFile))
+            {
+                SHA256 Sha256 = SHA256.Create();
+                using (FileStream stream = File.OpenRead(currentFile))
+                {
+                    byte[] hashBytes = Sha256.ComputeHash(stream);
+                    fileHash = BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+                }
+            }
+
             _logger.Invoke($"File {info.Name}");
             return 0;
+        }
+
+        private void BulkCopyToFileSheetData(string filePath, FileInfo info)
+        {
+            using (SqlBulkCopy bulk = new SqlBulkCopy(connection))
+            {
+                bulk.DestinationTableName = "dbo.FileSheetData";
+                try
+                {
+                    fileSheetData.AcceptChanges();
+                    bulk.WriteToServer(fileSheetData);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Invoke(
+                        $"Exception calling SqlBulkCopy.WriteToServer OnFile('{filePath}', '{info.ToString()}');\n{ex.ToString()}");
+                }
+            }
+
+            fileSheetData.Rows.Clear();
         }
 
         public int OnSheet(string sheetName)
         {
             currentSheet = sheetName;
-            // check if we are reloading or loading
-            // Do a file hash and check if it changed
+            // check db and see if we are reloading or loading
+            // using hash and check if it changed
+            int fileSheetId = GetSheetId(currentFile, currentSheet, fileHash);
 
+            if (fileSheetId < 1)  // skip the file, either it was already loaded or there is a problem
+            {
+                string fileName = Path.GetFileName(currentFile);
+                _logger.Invoke($"Skipping sheet GetSheetId('{fileName}', '{currentSheet}', '{fileHash}') returned {fileSheetId.ToString()}");
+                return 1;
+            }
+
+            currentSheetId = fileSheetId;
 
             _logger.Invoke($"Sheet '{sheetName}'");
             return 0;
+        }
+
+        private int GetSheetId(string f, string s, string h)
+        {
+            try
+            {
+                if (connection.State == ConnectionState.Open)
+                {
+                    string fileName = Path.GetFileName(f);
+                    string sql = "dbo.GetSheetId";
+                    SqlCommand cmd = new SqlCommand(sql, connection);
+                    cmd.CommandType = CommandType.StoredProcedure;
+                    cmd.Parameters.AddWithValue("@FileName", fileName);
+                    cmd.Parameters.AddWithValue("@Sheet", s);
+                    cmd.Parameters.AddWithValue("@Hash", h);
+                    Int32 id = Convert.ToInt32(cmd.ExecuteScalar());
+                    cmd.Dispose();
+                    return id;
+                }
+                else return -1;
+            }
+            catch (Exception ex)
+            {
+                _logger.Invoke($"Exception calling GetSheetId('{f}', '{s}', '{h}');\n{ex.ToString()}");
+                return -2;
+            }
         }
     }
 

@@ -1,6 +1,9 @@
 ﻿
-Read settings from App.config
-command line arguments
-Logging
 db work
+	Add Date and @DBAddUser, @DBRevUser to FileSheet table + stored procedure
+command line arguments
+
+X-Read settings from App.config
+X-Logging
+
 
